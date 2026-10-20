@@ -321,9 +321,3 @@ including the approximate prefill model and stationary/finite-window mismatch.
 
 Project title: **Queueing-Theoretic Performance Modeling for Continuous-Batching
 LLM Inference**.
-
-Suggested GitHub repository name if renaming the remote:
-
-```text
-queueing-llm-inference-modeling
-```
