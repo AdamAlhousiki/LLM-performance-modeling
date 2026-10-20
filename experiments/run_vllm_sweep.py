@@ -503,7 +503,6 @@ def _run_server_config(
         print("server ready", flush=True)
         log_text = "\n".join(log_lines)
         kv_info = _parse_kv_cache_info(log_text)
-        preemption_count = _parse_preemption_count(log_text)
         kv_budget = (
             kv_info["gpu_kv_cache_tokens"]
             or (
@@ -564,6 +563,14 @@ def _run_server_config(
                     "failed": failed,
                     "request_throughput": result.get("request_throughput"),
                     "request_goodput_slo_filtered": result.get("request_goodput"),
+                    "max_concurrency": result.get(
+                        "max_concurrency",
+                        result.get(
+                            "max_concurrent_requests",
+                            result.get("peak_concurrent_requests"),
+                        ),
+                    ),
+                    "max_active_sequences": result.get("max_active_sequences"),
                     "output_throughput": result.get("output_throughput"),
                     "total_token_throughput": result.get("total_token_throughput"),
                     "mean_tpot_s": _metric_seconds(result, "mean_tpot_ms"),
@@ -571,6 +578,14 @@ def _run_server_config(
                     "remote_result_path": str(result_path),
                 }
             )
+
+        final_log_text = "\n".join(log_lines)
+        final_kv_info = _parse_kv_cache_info(final_log_text)
+        kv_info = {
+            key: final_kv_info.get(key) or value
+            for key, value in kv_info.items()
+        }
+        preemption_count = _parse_preemption_count(final_log_text)
 
         metadata = {
             "max_num_seqs": server_config.max_num_seqs,

@@ -7,9 +7,8 @@ from pathlib import Path
 
 from tqdm import tqdm
 
-from analytical.markov_solver import markov_metrics
 from analytical.fit_service_rate import load_latency_curve
-from analytical.state_space import DEFAULT_PAGE_SIZE
+from analytical.markov_chain import markov_lite_metrics
 from experiments.run_sweep import parse_float_list, parse_int_list
 
 
@@ -32,36 +31,27 @@ SUMMARY_COLUMNS = [
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Solve the multi-class Markov chain over (n_1, ..., n_K)."
+        description="Run the Markov-chain-lite birth-death analytical model."
     )
     parser.add_argument("--prompt-mean", type=float, default=256.0)
     parser.add_argument("--generation-mean", type=float, default=128.0)
     parser.add_argument(
-        "--n-classes",
-        type=int,
-        default=2,
-        help="Number of request size classes (equal-probability bins of the joint lognormal).",
-    )
-    parser.add_argument(
-        "--page-size",
-        type=int,
-        default=DEFAULT_PAGE_SIZE,
-        help="KV page size in tokens (default 16; matches vLLM PagedAttention).",
-    )
-    parser.add_argument(
         "--arrival-rates",
         type=parse_float_list,
         default=DEFAULT_ARRIVAL_RATES,
+        help="Comma-separated arrival rates. Default: 0.5,1,2,3",
     )
     parser.add_argument(
         "--max-batch-sizes",
         type=parse_int_list,
         default=DEFAULT_MAX_BATCH_SIZES,
+        help="Comma-separated max batch sizes. Default: 1,4,8",
     )
     parser.add_argument(
         "--kv-budgets",
         type=parse_int_list,
         default=DEFAULT_KV_BUDGETS,
+        help="Comma-separated KV budgets. Default: 2048,4096,8192,16384",
     )
     parser.add_argument(
         "--output",
@@ -80,24 +70,21 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     args = parse_args()
     latency_model = load_latency_curve(args.latency_curve)
-    configs = list(
-        product(args.arrival_rates, args.max_batch_sizes, args.kv_budgets)
-    )
     rows = []
     max_states = 0
-    for arrival_rate, max_batch_size, kv_budget in tqdm(configs, desc="markov configs"):
-        result = markov_metrics(
+
+    configs = list(product(args.arrival_rates, args.max_batch_sizes, args.kv_budgets))
+    for arrival_rate, max_batch_size, kv_budget in tqdm(configs, desc="markov-lite"):
+        result = markov_lite_metrics(
             arrival_rate,
             max_batch_size,
             kv_budget,
             prompt_mean=args.prompt_mean,
             generation_mean=args.generation_mean,
-            n_classes=args.n_classes,
-            page_size=args.page_size,
             latency_model=latency_model,
         )
-        max_states = max(max_states, result.pop("n_states"))
-        rows.append(result)
+        max_states = max(max_states, int(result.pop("n_states")))
+        rows.append({column: result[column] for column in SUMMARY_COLUMNS})
 
     args.output.parent.mkdir(parents=True, exist_ok=True)
     with args.output.open("w", newline="", encoding="utf-8") as fh:

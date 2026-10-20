@@ -30,17 +30,23 @@ or preemption behavior.
 
 ### Analytical vs SimPy
 
-The analytical baseline was compared against the SimPy sweep over 48 matched
-configurations. The strongest agreement is on goodput; p95/p99 TTFT remain the
-hardest metrics because the baseline uses a simplified tail approximation.
+The final analytical comparison uses the 48-row SimPy grid shared by
+`results/sweep_summary.csv`, `results/closed_form_summary.csv`, and
+`results/markov_summary.csv`. `results/comparison_summary.csv` is a legacy
+first-approximation comparison and is not the source for the final report
+tables.
 
-| metric | mean relative error | median relative error |
-|---|---:|---:|
-| mean TTFT | 0.712 | 0.325 |
-| p95 TTFT | 1.821 | 0.295 |
-| p99 TTFT | 1.894 | 0.453 |
-| goodput | 0.177 | 0.106 |
-| blocking probability | 4.410 | 0.056 |
+| metric | closed-form mean error | Markov-lite mean error | closed-form median error | Markov-lite median error |
+|---|---:|---:|---:|---:|
+| mean TTFT | 0.232 | 0.232 | 0.095 | 0.095 |
+| p95 TTFT | 0.457 | 2.095 | 0.449 | 0.448 |
+| p99 TTFT | 0.632 | 2.052 | 0.595 | 0.521 |
+| goodput | 0.089 | 0.089 | 0.087 | 0.087 |
+| blocking probability | 0.490 | 0.490 | 0.004 | 0.004 |
+
+The calibrated-tail model only modifies p95/p99 TTFT. It improves median p95
+relative error from 0.448 to 0.233 and median p99 relative error from 0.521 to
+0.342, while leaving mean TTFT, goodput, and blocking unchanged.
 
 ### Modal/vLLM Sweep
 
@@ -60,12 +66,16 @@ Headline hardware measurements:
 - worst observed p99 TTFT: `0.185 s`
 - mean TTFT stayed below `0.061 s`
 - mean TPOT ranged from about `8.3` to `10.2 ms/token`
-- blocking probability and preemption count were zero in this measured grid
+- request failures and preemption count were zero in this measured grid
 
 The current vLLM sweep validates the full measurement pipeline and provides
-real latency scale, but it does not yet validate KV-blocking behavior. The next
-hardware experiment should increase effective pressure or request lengths until
-vLLM begins queueing deeply, preempting, or failing requests.
+real latency scale. The stress sweep additionally demonstrates queueing
+pressure, but neither sweep triggered KV-cache preemption or request failures.
+
+A tiny two-row stress sweep at 12 and 24 req/s with `max_num_seqs=64`,
+`gpu_memory_utilization=0.3`, and `max_model_len=4096` did create queueing
+pressure: p99 TTFT rose from `0.320 s` at 12 req/s to `2.485 s` at 24 req/s.
+It still produced zero failures and zero preemptions.
 
 More report-ready language is in `writeup/report_results.md`.
 
@@ -146,6 +156,49 @@ The repository also includes richer closed-form and Markov-chain analytical
 models, plus optional measured-service-rate injection from
 `results/latency_curve.json`.
 
+Run the Markov-chain-lite birth-death model and compare it with SimPy:
+
+```powershell
+.\.venv\Scripts\python.exe -m analytical.run_closed_form
+.\.venv\Scripts\python.exe -m analytical.run_markov
+.\.venv\Scripts\python.exe -m experiments.compare_simulation_markov
+.\.venv\Scripts\python.exe -m experiments.plot_markov_comparison
+```
+
+This writes:
+
+- `results/closed_form_summary.csv`
+- `results/markov_summary.csv`
+- `results/markov_comparison_summary.csv`
+- `results/analytical_error_table.csv`
+- `figures/markov_comparison_relative_errors.png`
+- `figures/markov_comparison_mean_ttft.png`
+- `figures/markov_comparison_p99_ttft.png`
+- `figures/markov_comparison_goodput.png`
+- `figures/markov_comparison_blocking_probability.png`
+
+Run the calibrated Markov-tail correction:
+
+```powershell
+.\.venv\Scripts\python.exe -m experiments.run_calibrated_tail
+.\.venv\Scripts\python.exe -m experiments.plot_calibrated_tail_comparison
+```
+
+This fits a lightweight semi-empirical correction to Markov-lite p95/p99 TTFT
+log residuals using a deterministic train/test split. It does not change the
+simulator, and it does not recalibrate mean TTFT, goodput, or blocking
+probability. It writes:
+
+- `results/calibrated_tail_predictions.csv`
+- `results/calibrated_tail_error_table.csv`
+- `results/calibrated_tail_train_test_error_table.csv`
+- `results/calibrated_tail_error_by_regime.csv`
+- `figures/calibrated_tail_p95_scatter.png`
+- `figures/calibrated_tail_p99_scatter.png`
+- `figures/calibrated_tail_relative_errors.png`
+- `figures/calibrated_tail_train_test_errors.png`
+- `figures/calibrated_tail_error_by_regime.png`
+
 ## ShareGPT Trace
 
 Build the canonical replay trace:
@@ -213,13 +266,56 @@ output length from `gen_len`. It writes:
 `results/sweep_summary.csv`. vLLM version, flags, TPOT, throughput, preemption
 count, and realized KV cache metadata are recorded in the metadata JSON.
 
-## Report Notes
+## Modal/vLLM Stress Sweep
 
-Use these files when writing the final report:
+Preview the heavier stress grid without launching a GPU job:
 
-- `writeup/report_results.md`: current result summary and suggested claims
-- `writeup/model_spec.md`: analytical model derivations and assumptions
-- `writeup/notes_for_adam.md`: analytical-track implementation notes
+```powershell
+.\.venv\Scripts\python.exe -m experiments.run_vllm_stress_sweep --dry-run
+```
+
+Run the stress sweep on Modal:
+
+```powershell
+$env:MODAL_PROFILE='adamco27'
+$env:PYTHONIOENCODING='utf-8'
+$env:PYTHONUTF8='1'
+.\.venv\Scripts\modal.exe run experiments/run_vllm_stress_sweep.py::app.vllm_stress_sweep
+```
+
+Plot stress results after the Modal run:
+
+```powershell
+.\.venv\Scripts\python.exe -m experiments.plot_vllm_stress
+```
+
+The stress sweep keeps the original 64-row sweep intact. The default stress
+grid is intentionally tiny: arrival rates `12,24`, `max_num_seqs=64`,
+`gpu_memory_utilization=0.3`, `max_model_len=4096`, 200 measured requests, and
+4 warmups. It probes whether TTFT/TPOT rises or vLLM begins preempting/failing
+under pressure without spending hours on a large sweep. It writes:
+
+- `results/vllm_stress_summary.csv`
+- `results/vllm_stress_metadata.json`
+- `results/vllm_stress_raw_summary.csv`
+- `figures/vllm_stress_ttft.png`
+- `figures/vllm_stress_tpot.png`
+- `figures/vllm_stress_goodput.png`
+
+## GPU Prediction Backtest
+
+Backtest the existing models against saved GPU measurements locally:
+
+```powershell
+python -m experiments.compare_gpu_predictions
+```
+
+This uses the recorded hardware grid, canonical trace lengths, and independent
+decode microbenchmark. It writes `results/gpu_prediction_comparison.csv`,
+`results/gpu_prediction_errors.csv`, and
+`figures/gpu_prediction_stress_comparison.png`. No GPU job is launched.
+Read `writeup/gpu_validation_interview.md` for the comparison results and limits,
+including the approximate prefill model and stationary/finite-window mismatch.
 
 ## Project Naming
 
